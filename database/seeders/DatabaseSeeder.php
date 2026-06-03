@@ -2,24 +2,35 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
+/**
+ * DatabaseSeeder — Orkestrator utama untuk seluruh seeder.
+ *
+ * URUTAN EKSEKUSI WAJIB (berdasarkan dependency foreign key):
+ *   1. DivisionSeeder  — tabel 'divisions' harus ada dulu
+ *   2. UserSeeder      — membutuhkan 'divisions.id' untuk foreign key
+ *
+ * Catatan untuk tim: Jangan ubah urutan ini. Pelanggaran urutan akan
+ * menyebabkan foreign key constraint violation pada Supabase PostgreSQL.
+ */
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
     /**
-     * Seed the application's database.
+     * Jalankan seluruh seeder aplikasi secara berurutan.
      */
     public function run(): void
     {
-        // User::factory(10)->create();
+        $this->command->info('🚀 Memulai proses seeding database E-Procurement BNI...');
+        $this->command->newLine();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        $this->call([
+            DivisionSeeder::class, // [1] Harus pertama — tidak ada dependency
+            UserSeeder::class,     // [2] Membutuhkan divisions
         ]);
+
+        $this->command->newLine();
+        $this->command->info('🎉 Seeding selesai! Database siap untuk development & testing.');
     }
 }
+

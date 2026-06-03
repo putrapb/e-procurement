@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Division;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -7,26 +9,22 @@ use Tests\TestCase;
 |--------------------------------------------------------------------------
 | Test Case
 |--------------------------------------------------------------------------
-|
-| The closure you provide to your test functions is always bound to a specific PHPUnit test
-| case class. By default, that class is "PHPUnit\Framework\TestCase". Of course, you may
-| need to change it using the "pest()" function to bind a different classes or traits.
-|
 */
 
+// Feature tests: full HTTP stack + database refresh
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');
 
+// Unit tests: juga butuh RefreshDatabase karena menggunakan Eloquent factories
+pest()->extend(TestCase::class)
+    ->use(RefreshDatabase::class)
+    ->in('Unit');
+
 /*
 |--------------------------------------------------------------------------
-| Expectations
+| Custom Expectations
 |--------------------------------------------------------------------------
-|
-| When you're writing tests, you often need to check that values meet certain conditions. The
-| "expect()" function gives you access to a set of "expectations" methods that you can use
-| to assert different things. Of course, you may extend the Expectation API at any time.
-|
 */
 
 expect()->extend('toBeOne', function () {
@@ -35,16 +33,29 @@ expect()->extend('toBeOne', function () {
 
 /*
 |--------------------------------------------------------------------------
-| Functions
+| Global Helper Functions — Kurangi boilerplate di setiap test file
 |--------------------------------------------------------------------------
-|
-| While Pest is very powerful out-of-the-box, you may have some testing code specific to your
-| project that you don't want to repeat in every file. Here you can also expose helpers as
-| global functions to help you to reduce the number of lines of code in your test files.
-|
 */
 
-function something()
+/**
+ * Buat officer yang sudah terhubung ke divisi tertentu.
+ * Shortcut untuk: Division::factory()->create() + User::factory()->forDivision()->create()
+ */
+function createOfficer(?Division $division = null): User
 {
-    // ..
+    $division ??= Division::factory()->withFullBudget()->create();
+    return User::factory()->forDivision($division)->create();
 }
+
+/**
+ * Buat divisi dengan sisa pagu yang ditentukan secara eksplisit.
+ * Berguna untuk skenario test boundary condition Gate 1.
+ */
+function createDivisionWithBudget(float $remaining): Division
+{
+    return Division::factory()->create([
+        'yearly_budget_limit' => 10_000_000_000.00,
+        'remaining_budget'    => $remaining,
+    ]);
+}
+
