@@ -8,29 +8,24 @@ use Illuminate\Database\Seeder;
  * DatabaseSeeder — Orkestrator utama untuk seluruh seeder.
  *
  * URUTAN EKSEKUSI WAJIB (berdasarkan dependency foreign key):
- *   1. DivisionSeeder  — tabel 'divisions' harus ada dulu
- *   2. UserSeeder      — membutuhkan 'divisions.id' untuk foreign key
+ *   1. DepartmentAndEmployeeSeeder — tabel 'divisions' + 'employees' harus ada dulu
  *
- * Catatan untuk tim: Jangan ubah urutan ini. Pelanggaran urutan akan
- * menyebabkan foreign key constraint violation pada Supabase PostgreSQL.
+ * Catatan: DivisionSeeder dan UserSeeder lama sudah diganti oleh
+ * DepartmentAndEmployeeSeeder yang mencakup 4 departemen IT BNI
+ * dan data karyawan dari simulasi database HR.
  */
 class DatabaseSeeder extends Seeder
 {
-    /**
-     * Jalankan seluruh seeder aplikasi secara berurutan.
-     */
     public function run(): void
     {
         $this->command->info('🚀 Memulai proses seeding database E-Procurement BNI...');
         $this->command->newLine();
 
         $this->call([
-            DivisionSeeder::class, // [1] Harus pertama — tidak ada dependency
-            UserSeeder::class,     // [2] Membutuhkan divisions
+            DepartmentAndEmployeeSeeder::class, // Departemen IT + Karyawan HR
         ]);
 
         $this->command->newLine();
         $this->command->info('🎉 Seeding selesai! Database siap untuk development & testing.');
     }
 }
-

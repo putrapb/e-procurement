@@ -7,14 +7,17 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     /**
-     * Run the migrations.
-     *
      * Skema tabel utama sistem E-Procurement BNI.
-     * Setiap kolom dirancang untuk mendukung mekanisme 4-Gate Smart Validation Engine:
-     *   - Gate 1: budget_estimated + status (budget_locked) + division_id
+     *
+     * Mendukung flow multi-role approval pipeline:
+     *   Staff submit → PFA review → Staff validate (4-Gate) →
+     *   Head Dept forward → Head Div decide → PFA generate PO
+     *
+     * Kolom-kolom mendukung 4-Gate Smart Validation Engine:
+     *   - Gate 1: budget_estimated + division_id (budget lock saat Head Div approve)
      *   - Gate 2: expenditure_type (auto-classified: CAPEX / OPEX)
      *   - Gate 3: vendor_name + user_id (eligibility verification)
-     *   - Gate 4: document_path (Izin Prinsip PDF → Supabase S3)
+     *   - Gate 4: document_path (Izin Prinsip PDF → S3/local)
      */
     public function up(): void
     {
@@ -25,12 +28,12 @@ return new class extends Migration
             $table->foreignId('user_id')
                   ->constrained('users')
                   ->cascadeOnDelete()
-                  ->comment('Requestor — officer yang mengajukan ticket pengadaan');
+                  ->comment('Requestor — staff yang mengajukan ticket pengadaan');
 
             $table->foreignId('division_id')
                   ->constrained('divisions')
                   ->cascadeOnDelete()
-                  ->comment('Divisi asal requestor; digunakan Gate 1 untuk cross-reference pagu');
+                  ->comment('Departemen asal requestor; digunakan Gate 1 untuk cross-reference pagu');
 
             // ── Identitas Pengadaan ─────────────────────────────────────────
             $table->string('title', 255)
@@ -42,46 +45,47 @@ return new class extends Migration
 
             // ── Gate 1: Budget Checking & Smart Locking ─────────────────────
             $table->decimal('budget_estimated', 15, 2)
-                  ->comment('Estimasi nilai transaksi (Rupiah); divalidasi terhadap remaining_budget divisi');
+                  ->comment('Estimasi nilai transaksi (Rupiah); pagu dikunci saat Head Div approve');
 
             // ── Gate 2: Automated CAPEX / OPEX Classification ───────────────
             $table->enum('expenditure_type', ['CAPEX', 'OPEX'])
                   ->nullable()
-                  ->comment('Klasifikasi akuntansi; ditulis otomatis oleh ProcurementValidationService, BUKAN input manual');
+                  ->comment('Klasifikasi akuntansi; ditulis otomatis oleh 4-Gate Engine, BUKAN input manual');
 
             // ── Gate 3: Vendor Eligibility ──────────────────────────────────
             $table->string('vendor_name', 255)
-                  ->comment('Nama perusahaan vendor eksternal; diverifikasi terhadap registry mitra aktif BNI');
+                  ->comment('Nama perusahaan vendor eksternal');
 
             // ── Gate 4: Document Completeness (Izin Prinsip PDF → S3) ────────
             $table->string('document_path')->nullable()
-                  ->comment('URL publik S3 Supabase ke file PDF Izin Prinsip; null = ticket tetap dalam status draft');
+                  ->comment('URL/path ke file PDF Izin Prinsip; diperlukan untuk review PFA');
 
-            // ── Status Lifecycle ────────────────────────────────────────────
+            // ── Status Lifecycle (8-Step Multi-Role Pipeline) ────────────────
             $table->enum('status', [
-                'draft',              // Default: dokumen belum lengkap / Gate 4 belum dipenuhi
-                'pending_validation', // Diajukan, menunggu proses validasi 4-Gate
-                'budget_locked',      // Gate 1 lolos: pagu divisi telah dikunci secara atomik
-                'approved',           // Seluruh 4-Gate lolos: ticket disetujui
-                'rejected',           // Salah satu gate gagal: ticket ditolak
-            ])->default('draft')
-              ->comment('Status lifecycle ticket dalam alur 4-Gate Smart Validation Engine');
+                'pending_review',    // Staff submit → menunggu PFA review dokumen
+                'revision',          // PFA tolak dokumen → staff harus revisi & re-upload
+                'need_to_validate',  // PFA approve dokumen → staff bisa run 4-Gate
+                'pending_dept_head', // 4-Gate lolos → menunggu Head Dept forward
+                'pending_div_head',  // Head Dept forward → menunggu Head Div decide
+                'declined',          // Head Div tolak pengadaan
+                'approved',          // Head Div approve → pagu dikunci di sini
+                'po_generated',      // PFA sudah generate PO/Invoice
+            ])->default('pending_review')
+              ->comment('Status lifecycle ticket dalam alur multi-role approval pipeline');
+
+            // ── Catatan Penolakan ───────────────────────────────────────────
+            $table->text('rejection_note')->nullable()
+                  ->comment('Alasan penolakan oleh PFA (dokumen) atau Head Div (keputusan)');
 
             $table->timestamps();
 
             // ── Indexes untuk Performa Query ────────────────────────────────
-            // Komposit: budget validation query selalu filter per divisi + status
             $table->index(['division_id', 'status'], 'idx_tickets_division_status');
-            // Komposit: dashboard requestor selalu filter per user + status
             $table->index(['user_id', 'status'], 'idx_tickets_user_status');
-            // Single: filter global per status (admin view)
             $table->index('status', 'idx_tickets_status');
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('tickets');

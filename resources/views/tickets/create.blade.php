@@ -4,7 +4,7 @@
             <h2 class="font-bold text-2xl text-gray-800 leading-tight">
                 Ajukan Pengadaan Baru
             </h2>
-            <p class="text-sm text-gray-500 mt-1">Formulir Pengajuan Tiket E-Procurement Divisi BNI</p>
+            <p class="text-sm text-gray-500 mt-1">Lengkapi data pengadaan. Dokumen wajib dilampirkan untuk review PFA.</p>
         </div>
     </x-slot>
 
@@ -99,7 +99,7 @@
                     <!-- Dokumen Izin Prinsip -->
                     <div class="mb-8">
                         <label for="document_path" class="block text-sm font-semibold text-gray-700 mb-2">
-                            Dokumen Izin Prinsip (PDF)
+                            Dokumen Izin Prinsip (PDF) <span class="text-rose-500">*</span>
                             <span class="text-gray-400 text-xs font-normal">(Format PDF, Maks 10MB)</span>
                         </label>
                         <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg hover:border-bni-teal transition-colors @error('document_path') border-red-300 @enderror">
@@ -115,7 +115,7 @@
                                     </label>
                                 </div>
                                 <p class="text-xs text-gray-500">Izin Prinsip yang telah ditandatangani pemimpin divisi</p>
-                                <p class="text-xs text-gray-400 italic font-semibold mt-1">Jika dikosongkan, pengajuan akan disimpan dengan status 'Draft'</p>
+                                <p class="text-xs text-rose-400 font-semibold mt-1">Dokumen wajib dilampirkan untuk proses review PFA</p>
                             </div>
                         </div>
                         
@@ -134,20 +134,21 @@
                     <div class="flex items-center justify-end gap-4 border-t border-gray-100 pt-6">
                         <a href="{{ route('tickets.index') }}" 
                            :class="loading ? 'pointer-events-none opacity-50' : ''"
-                           class="px-4 py-2 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors">
+                           class="px-5 py-2.5 text-sm font-semibold text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                             Batal
                         </a>
                         
                         <button type="submit" 
                                 :disabled="loading"
-                                class="inline-flex items-center px-5 py-2.5 bg-bni-teal text-white font-semibold text-sm rounded-lg shadow-sm hover:bg-opacity-90 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed gap-2"
-                                :class="loading ? 'bg-opacity-50' : ''">
+                                style="background-color: #005E6A;"
+                                class="inline-flex items-center px-6 py-2.5 text-white font-bold text-sm rounded-lg shadow-md hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed gap-2"
+                                :class="loading ? 'opacity-50' : ''">
                             <!-- Spinner -->
                             <svg x-show="loading" class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" style="display: none;">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <span x-text="loading ? 'Mengunggah Izin Prinsip ke S3...' : 'Ajukan Pengadaan'">Ajukan Pengadaan</span>
+                            <span x-text="loading ? 'Mengunggah...' : 'Ajukan Pengadaan'">Ajukan Pengadaan</span>
                         </button>
                     </div>
 

@@ -29,7 +29,7 @@ class TicketFactory extends Factory
     ];
 
     /**
-     * State default: ticket dalam status draft, belum ada dokumen, nilai OPEX.
+     * State default: ticket dalam status pending_review, dokumen terunggah, nilai OPEX.
      *
      * @return array<string, mixed>
      */
@@ -43,65 +43,100 @@ class TicketFactory extends Factory
             'budget_estimated' => fake()->randomFloat(2, 1_000_000, 100_000_000), // 1 Juta - 100 Juta
             'expenditure_type' => Ticket::EXPENDITURE_OPEX, // Default OPEX
             'vendor_name'      => fake()->company() . ' Indonesia',
-            'document_path'    => null, // Default: belum ada dokumen (status draft)
-            'status'           => Ticket::STATUS_DRAFT,
+            'document_path'    => 'tickets/izin-prinsip-' . fake()->uuid() . '.pdf',
+            'status'           => Ticket::STATUS_PENDING_REVIEW,
         ];
     }
 
     // ── States Berdasarkan Status Lifecycle ───────────────────────────────────
 
     /**
-     * State: Ticket dalam status draft (belum ada dokumen Izin Prinsip).
-     * Gate 4 belum dipenuhi.
+     * State: Ticket tanpa melampirkan dokumen Izin Prinsip.
      */
-    public function asDraft(): static
+    public function withoutDocument(): static
     {
         return $this->state(fn (array $attributes) => [
             'document_path' => null,
-            'status'        => Ticket::STATUS_DRAFT,
         ]);
     }
 
     /**
-     * State: Ticket sudah memiliki dokumen dan menunggu validasi 4-Gate.
+     * State: Ticket dalam status pending_review.
      */
-    public function asPendingValidation(): static
+    public function asPendingReview(): static
     {
         return $this->state(fn (array $attributes) => [
-            'document_path' => 'tickets/izin-prinsip-' . fake()->uuid() . '.pdf',
-            'status'        => Ticket::STATUS_PENDING_VALIDATION,
+            'status' => Ticket::STATUS_PENDING_REVIEW,
         ]);
     }
 
     /**
-     * State: Gate 1 lolos — pagu divisi sudah dikunci.
+     * State: Ticket dalam status revision.
      */
-    public function asBudgetLocked(): static
+    public function asRevision(): static
     {
         return $this->state(fn (array $attributes) => [
-            'document_path' => 'tickets/izin-prinsip-' . fake()->uuid() . '.pdf',
-            'status'        => Ticket::STATUS_BUDGET_LOCKED,
+            'status' => Ticket::STATUS_REVISION,
         ]);
     }
 
     /**
-     * State: Seluruh 4-Gate lolos — ticket disetujui.
+     * State: Ticket dalam status need_to_validate.
+     */
+    public function asNeedToValidate(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
+    }
+
+    /**
+     * State: Ticket dalam status pending_dept_head.
+     */
+    public function asPendingDeptHead(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Ticket::STATUS_PENDING_DEPT_HEAD,
+        ]);
+    }
+
+    /**
+     * State: Ticket dalam status pending_div_head.
+     */
+    public function asPendingDivHead(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Ticket::STATUS_PENDING_DIV_HEAD,
+        ]);
+    }
+
+    /**
+     * State: Ticket disetujui (status approved).
      */
     public function asApproved(): static
     {
         return $this->state(fn (array $attributes) => [
-            'document_path' => 'tickets/izin-prinsip-' . fake()->uuid() . '.pdf',
-            'status'        => Ticket::STATUS_APPROVED,
+            'status' => Ticket::STATUS_APPROVED,
         ]);
     }
 
     /**
-     * State: Ticket ditolak (salah satu gate gagal).
+     * State: Ticket ditolak (status declined).
      */
-    public function asRejected(): static
+    public function asDeclined(): static
     {
         return $this->state(fn (array $attributes) => [
-            'status' => Ticket::STATUS_REJECTED,
+            'status' => Ticket::STATUS_DECLINED,
+        ]);
+    }
+
+    /**
+     * State: Ticket PO dihasilkan (status po_generated).
+     */
+    public function asPoGenerated(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Ticket::STATUS_PO_GENERATED,
         ]);
     }
 

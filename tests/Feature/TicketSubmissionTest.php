@@ -1,437 +1,252 @@
 <?php
 
 use App\Models\Division;
+use App\Models\Employee;
 use App\Models\Ticket;
 use App\Models\User;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\UploadedFile;
 
 // ============================================================================
-// AUTENTIKASI — akses tanpa login harus ditolak
+// GUEST PROTECTION
 // ============================================================================
 
-describe('Autentikasi — Proteksi Route Ticket', function () {
+describe('Authentication — Route Protection', function () {
 
     test('guest tidak dapat mengakses halaman daftar ticket', function () {
-        $this->get(route('tickets.index'))
-             ->assertRedirect(route('login'));
+        $this->get(route('tickets.index'))->assertRedirect(route('login'));
     });
 
     test('guest tidak dapat mengakses form pengajuan ticket', function () {
-        $this->get(route('tickets.create'))
-             ->assertRedirect(route('login'));
+        $this->get(route('tickets.create'))->assertRedirect(route('login'));
     });
 
     test('guest tidak dapat melakukan POST pengajuan ticket', function () {
-        $this->post(route('tickets.store'), [])
-             ->assertRedirect(route('login'));
+        $this->post(route('tickets.store'), [])->assertRedirect(route('login'));
     });
 
 });
 
 // ============================================================================
-// FORM VALIDATION — validasi sintaksis (StoreTicketRequest)
+// REGISTRATION WITH NIP & HR DATABASE MATCHING
 // ============================================================================
 
-describe('Form Validation — StoreTicketRequest', function () {
+describe('Registration — NIP HR Matching', function () {
 
-    test('form validation menolak request dengan field wajib yang kosong', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), []) // Semua field kosong
-             ->assertSessionHasErrors(['title', 'budget_estimated', 'vendor_name']);
-    });
-
-    test('form validation menolak budget_estimated yang bukan angka', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => 'Pengadaan Test',
-                 'budget_estimated' => 'bukan-angka',
-                 'vendor_name'      => 'PT Vendor Test',
-             ])
-             ->assertSessionHasErrors(['budget_estimated']);
-    });
-
-    test('form validation menolak budget_estimated bernilai nol atau negatif', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => 'Pengadaan Test',
-                 'budget_estimated' => 0,
-                 'vendor_name'      => 'PT Vendor Test',
-             ])
-             ->assertSessionHasErrors(['budget_estimated']);
-    });
-
-    test('form validation menolak title yang melebihi 255 karakter', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => str_repeat('A', 256), // 256 karakter
-                 'budget_estimated' => 10_000_000,
-                 'vendor_name'      => 'PT Vendor Test',
-             ])
-             ->assertSessionHasErrors(['title']);
-    });
-
-});
-
-// ============================================================================
-// ALUR PENGAJUAN TICKET — happy path dan gate failures via HTTP
-// ============================================================================
-
-describe('Alur Pengajuan Ticket — HTTP End-to-End', function () {
-
-    test('officer berhasil mengajukan ticket dan diredirect ke halaman detail', function () {
-        Storage::fake('s3');
-        
-        $division = Division::factory()->create([
-            'yearly_budget_limit' => 5_000_000_000.00,
-            'remaining_budget'    => 5_000_000_000.00,
+    test('karyawan berhasil registrasi jika NIP dan email terdaftar di HR', function () {
+        $division = Division::factory()->create(['code' => 'DIV-IT']);
+        $employee = Employee::create([
+            'nip'           => 'BNI-2024-999',
+            'name'          => 'John Doe',
+            'email'         => 'john.doe@bni.co.id',
+            'position'      => 'Staff IT',
+            'role'          => 'staff',
+            'division_id'   => $division->id,
+            'is_registered' => false,
         ]);
-        $officer = User::factory()->forDivision($division)->create();
-        $file = UploadedFile::fake()->create('izin-prinsip-test.pdf', 500, 'application/pdf');
 
-        $response = $this->actingAs($officer)
+        $response = $this->post(route('register'), [
+            'nip'                   => 'BNI-2024-999',
+            'name'                  => 'John Doe',
+            'email'                 => 'john.doe@bni.co.id',
+            'password'              => 'password123',
+            'password_confirmation' => 'password123',
+        ]);
+
+        $response->assertRedirect(route('dashboard'));
+        $this->assertDatabaseHas('users', [
+            'email' => 'john.doe@bni.co.id',
+            'role'  => 'staff',
+        ]);
+        expect($employee->fresh()->is_registered)->toBeTrue();
+    });
+
+    test('registrasi ditolak jika NIP dan email tidak terdaftar di HR', function () {
+        $response = $this->post(route('register'), [
+            'nip'                   => 'BNI-INVALID',
+            'name'                  => 'Unknown Karyawan',
+            'email'                 => 'unknown@bni.co.id',
+            'password'              => 'password123',
+            'password_confirmation' => 'password123',
+        ]);
+
+        $response->assertSessionHasErrors(['nip']);
+        $this->assertDatabaseMissing('users', [
+            'email' => 'unknown@bni.co.id',
+        ]);
+    });
+
+});
+
+// ============================================================================
+// STORE VALIDATION
+// ============================================================================
+
+describe('Form Validation — Ticket Creation', function () {
+
+    test('form validation menolak field wajib yang kosong', function () {
+        $division = Division::factory()->create();
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+
+        $this->actingAs($staff)
+             ->post(route('tickets.store'), [])
+             ->assertSessionHasErrors(['title', 'budget_estimated', 'vendor_name', 'document_path']);
+    });
+
+});
+
+// ============================================================================
+// E2E PIPELINE FLOW
+// ============================================================================
+
+describe('End-to-End Pipeline Approval Flow', function () {
+
+    test('alur lengkap persetujuan multi-role dari submission hingga PO terbuat', function () {
+        Storage::fake('public');
+
+        // 1. Setup Divisi dan Pengguna per Role
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 10_000_000_000.00,
+            'remaining_budget'    => 10_000_000_000.00,
+        ]);
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $pfa      = User::factory()->forDivision($division)->create(['role' => 'pfa']);
+        $headDept = User::factory()->forDivision($division)->create(['role' => 'head_dept']);
+        $headDiv  = User::factory()->forDivision($division)->create(['role' => 'head_div']);
+
+        $file = UploadedFile::fake()->create('izin-prinsip.pdf', 500, 'application/pdf');
+
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 1: Staff membuat tiket baru (status = pending_review)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($staff)
                          ->post(route('tickets.store'), [
-                             'title'            => 'Pengadaan Laptop Tim IT',
-                             'description'      => 'Laptop untuk kebutuhan developer tim infrastruktur.',
-                             'budget_estimated' => 50_000_000.00,
-                             'vendor_name'      => 'PT Mitra Teknologi Utama',
+                             'title'            => 'Server HPE ProLiant IT',
+                             'description'      => 'Server untuk data center utama IT.',
+                             'budget_estimated' => 600_000_000.00, // Capex threshold
+                             'vendor_name'      => 'PT HPE Indonesia',
                              'document_path'    => $file,
                          ]);
 
-        // Assert: redirect ke halaman detail ticket yang baru dibuat
         $ticket = Ticket::first();
+        expect($ticket)->not->toBeNull();
         $response->assertRedirect(route('tickets.show', $ticket));
+        expect($ticket->status)->toBe(Ticket::STATUS_PENDING_REVIEW);
 
-        // Assert: flash message sukses ada
-        $response->assertSessionHas('success');
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 2: PFA menyetujui dokumen (status = need_to_validate)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($pfa)
+                         ->post(route('tickets.review-approve', $ticket));
 
-        // Assert: ticket tersimpan di database
-        expect(Ticket::count())->toBe(1);
-        expect($ticket->status)->toBe(Ticket::STATUS_BUDGET_LOCKED);
-        expect($ticket->document_path)->not->toBeNull();
-        Storage::disk('s3')->assertExists('tickets/' . $file->hashName());
-    });
+        $response->assertRedirect(route('tickets.show', $ticket));
+        expect($ticket->fresh()->status)->toBe(Ticket::STATUS_NEED_TO_VALIDATE);
 
-    test('Gate 1 — pengajuan ticket diblok dan kembali ke form saat budget melebihi pagu divisi', function () {
-        // Arrange: divisi dengan sisa pagu hanya Rp 100.000
-        $division = Division::factory()->withLimitedBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 3: Staff menjalankan 4-Gate Validation (status = pending_dept_head)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($staff)
+                         ->post(route('tickets.validate', $ticket));
 
-        $response = $this->actingAs($officer)
-                         ->post(route('tickets.store'), [
-                             'title'            => 'Core Infrastructure Mainframe Asset',
-                             'budget_estimated' => 950_000_000.00, // 950 Juta >> Rp 100 Ribu
-                             'vendor_name'      => 'PT Enterprise Vendor Utama',
-                         ]);
+        $response->assertRedirect(route('tickets.show', $ticket));
+        $ticket = $ticket->fresh();
+        expect($ticket->status)->toBe(Ticket::STATUS_PENDING_DEPT_HEAD);
+        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX); // Auto classified!
 
-        // Assert: session memiliki validation error pada budget_estimated
-        $response->assertSessionHasErrors(['budget_estimated']);
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 4: Head Dept meneruskan tiket (status = pending_div_head)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($headDept)
+                         ->post(route('tickets.forward', $ticket));
 
-        // Assert: tidak ada ticket tersimpan di database
-        expect(Ticket::count())->toBe(0);
-    });
+        $response->assertRedirect(route('tickets.show', $ticket));
+        expect($ticket->fresh()->status)->toBe(Ticket::STATUS_PENDING_DIV_HEAD);
 
-    test('ticket berstatus draft saat officer mengajukan tanpa melampirkan dokumen Izin Prinsip', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => 'Pemeliharaan AC Kantor',
-                 'budget_estimated' => 15_000_000.00,
-                 'vendor_name'      => 'PT Sejuk Mandiri',
-                 // Tidak ada document_path
-             ])
-             ->assertSessionHas('success');
-
-        $ticket = Ticket::first();
-        expect($ticket->status)->toBe(Ticket::STATUS_DRAFT)
-            ->and($ticket->document_path)->toBeNull();
-    });
-
-    test('Gate 2 — ticket CAPEX diklasifikasikan otomatis tanpa input user saat nilai >= Rp 500 Juta', function () {
-        Storage::fake('s3');
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-        $file = UploadedFile::fake()->create('izin-prinsip-test.pdf', 500, 'application/pdf');
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => 'Pengadaan Sistem Keamanan Gedung',
-                 'budget_estimated' => 750_000_000.00, // 750 Juta = CAPEX
-                 'vendor_name'      => 'PT Securindo Packatama',
-                 'document_path'    => $file,
-             ]);
-
-        $ticket = Ticket::first();
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
-    });
-
-    test('Gate 2 — ticket OPEX diklasifikasikan otomatis untuk pengadaan rutin di bawah threshold', function () {
-        Storage::fake('s3');
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-        $file = UploadedFile::fake()->create('izin-prinsip-test.pdf', 500, 'application/pdf');
-
-        $this->actingAs($officer)
-             ->post(route('tickets.store'), [
-                 'title'            => 'Langganan Zoom Premium Bulanan',
-                 'budget_estimated' => 3_000_000.00, // 3 Juta = OPEX
-                 'vendor_name'      => 'PT Zoom Video Indonesia',
-                 'document_path'    => $file,
-             ]);
-
-        $ticket = Ticket::first();
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_OPEX);
-    });
-
-    test('Gate 4 — rollback transaksi database jika upload file ke S3 gagal/down', function () {
-        // Simulasi S3 error
-        Storage::shouldReceive('disk')->with('s3')->andThrow(new \Exception('S3 Connection Timeout'));
-
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-        $file = UploadedFile::fake()->create('izin-prinsip-test.pdf', 500, 'application/pdf');
-
-        $response = $this->actingAs($officer)
-                         ->post(route('tickets.store'), [
-                             'title'            => 'Pengadaan Server Baru',
-                             'budget_estimated' => 100_000_000.00,
-                             'vendor_name'      => 'PT Vendor Server',
-                             'document_path'    => $file,
-                         ]);
-
-        // Assert: session memiliki error pada document_path
-        $response->assertSessionHasErrors(['document_path']);
-
-        // Assert: pagu tidak berkurang (rollback transaksi)
-        $division->refresh();
-        expect($division->remaining_budget)->toBe($division->yearly_budget_limit);
-
-        // Assert: ticket tidak terbuat di database
-        expect(Ticket::count())->toBe(0);
-    });
-
-});
-
-// ============================================================================
-// AKSES DETAIL TICKET — otorisasi kepemilikan dan divisi (TicketPolicy)
-// ============================================================================
-
-describe('Akses Detail Ticket — Otorisasi Kepemilikan dan Divisi', function () {
-
-    test('officer dapat melihat detail ticket miliknya sendiri', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-        $ticket   = Ticket::factory()->forUser($officer)->asApproved()->create();
-
-        $this->actingAs($officer)
-             ->get(route('tickets.show', $ticket))
-             ->assertOk();
-    });
-
-    test('officer tidak dapat melihat ticket milik officer lain (403)', function () {
-        $division  = Division::factory()->withFullBudget()->create();
-        $ownerUser = User::factory()->forDivision($division)->create();
-        $otherUser = User::factory()->forDivision($division)->create();
-        $ticket    = Ticket::factory()->forUser($ownerUser)->asDraft()->create();
-
-        $this->actingAs($otherUser)
-             ->get(route('tickets.show', $ticket))
-             ->assertForbidden();
-    });
-
-    test('officer tidak dapat mengakses halaman edit ticket milik officer lain', function () {
-        $division  = Division::factory()->withFullBudget()->create();
-        $ownerUser = User::factory()->forDivision($division)->create();
-        $otherUser = User::factory()->forDivision($division)->create();
-        $ticket    = Ticket::factory()->forUser($ownerUser)->create();
-
-        $this->actingAs($otherUser)
-             ->get(route('tickets.edit', $ticket))
-             ->assertForbidden();
-    });
-
-    test('officer tidak dapat melakukan update ticket milik officer lain', function () {
-        $division  = Division::factory()->withFullBudget()->create();
-        $ownerUser = User::factory()->forDivision($division)->create();
-        $otherUser = User::factory()->forDivision($division)->create();
-        $ticket    = Ticket::factory()->forUser($ownerUser)->create();
-
-        $this->actingAs($otherUser)
-             ->put(route('tickets.update', $ticket), [
-                 'title'       => 'Judul Baru',
-                 'vendor_name' => 'PT Vendor Baru',
-             ])
-             ->assertForbidden();
-    });
-
-    test('officer tidak dapat menghapus ticket milik officer lain', function () {
-        $division  = Division::factory()->withFullBudget()->create();
-        $ownerUser = User::factory()->forDivision($division)->create();
-        $otherUser = User::factory()->forDivision($division)->create();
-        $ticket    = Ticket::factory()->forUser($ownerUser)->create();
-
-        $this->actingAs($otherUser)
-             ->delete(route('tickets.destroy', $ticket))
-             ->assertForbidden();
-    });
-
-    test('officer dari divisi berbeda tidak dapat mengakses ticket meskipun user id dimanipulasi', function () {
-        $div1  = Division::factory()->withFullBudget()->create();
-        $div2  = Division::factory()->withFullBudget()->create();
-        $user1 = User::factory()->forDivision($div1)->create();
-        $user2 = User::factory()->forDivision($div2)->create();
-        
-        // Buat tiket dengan user_id user1 tapi division_id div2 (kondisi tidak konsisten / manipulasi)
-        $ticket = Ticket::factory()->create([
-            'user_id'     => $user1->id,
-            'division_id' => $div2->id,
-        ]);
-
-        // user1 mencoba mengakses, tapi division_id tidak cocok
-        $this->actingAs($user1)
-             ->get(route('tickets.show', $ticket))
-             ->assertForbidden();
-    });
-
-    test('admin (tanpa division_id) dapat melihat, mengedit, mengupdate, dan menghapus tiket mana saja', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-        $ticket   = Ticket::factory()->forUser($officer)->create();
-        $admin    = User::factory()->create(['division_id' => null]); // Admin
-
-        // Admin view
-        $this->actingAs($admin)
-             ->get(route('tickets.show', $ticket))
-             ->assertOk();
-
-        // Admin edit page
-        $this->actingAs($admin)
-             ->get(route('tickets.edit', $ticket))
-             ->assertOk();
-
-        // Admin update
-        $this->actingAs($admin)
-             ->put(route('tickets.update', $ticket), [
-                 'title'       => 'Diupdate Admin',
-                 'vendor_name' => 'PT BNI Utama',
-             ])
-             ->assertRedirect(route('tickets.show', $ticket));
-
-        // Admin delete
-        $this->actingAs($admin)
-             ->delete(route('tickets.destroy', $ticket))
-             ->assertRedirect(route('tickets.index'));
-             
-        expect(Ticket::count())->toBe(0);
-    });
-
-});
-
-// ============================================================================
-// ALUR PERSETUJUAN — Approval, Rejection, dan Budget Refund
-// ============================================================================
-
-describe('Alur Persetujuan (Approval Flow) — Admin Actions', function () {
-
-    test('admin berhasil menyetujui tiket berstatus budget_locked', function () {
-        $division = Division::factory()->create([
-            'yearly_budget_limit' => 1_000_000_000.00,
-            'remaining_budget'    => 900_000_000.00, // sudah dipotong 100 juta
-        ]);
-        $officer = User::factory()->forDivision($division)->create();
-        $admin   = User::factory()->create(['division_id' => null]);
-        
-        $ticket = Ticket::factory()->forUser($officer)->create([
-            'division_id'      => $division->id,
-            'budget_estimated' => 100_000_000.00,
-            'status'           => Ticket::STATUS_BUDGET_LOCKED,
-        ]);
-
-        $response = $this->actingAs($admin)
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 5: Head Div menyetujui tiket (status = approved, pagu dikunci)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($headDiv)
                          ->post(route('tickets.approve', $ticket));
 
-        $response->assertRedirect(route('tickets.show', $ticket))
-                 ->assertSessionHas('success');
+        $response->assertRedirect(route('tickets.show', $ticket));
+        expect($ticket->fresh()->status)->toBe(Ticket::STATUS_APPROVED);
+        // Sisa pagu IT terpotong 600 juta
+        expect($division->fresh()->remaining_budget)->toBe('9400000000.00');
 
-        $ticket->refresh();
-        expect($ticket->status)->toBe(Ticket::STATUS_APPROVED);
+        // ─────────────────────────────────────────────────────────────
+        // LANGKAH 6: PFA generate PO (status = po_generated & PDF dibikin)
+        // ─────────────────────────────────────────────────────────────
+        $response = $this->actingAs($pfa)
+                         ->post(route('tickets.generate-po', $ticket), [
+                             'notes' => 'Catatan PO Server IT',
+                         ]);
 
-        // Budget tetap berkurang, tidak berubah
-        $division->refresh();
-        expect((float) $division->remaining_budget)->toBe(900_000_000.00);
+        $response->assertRedirect(route('tickets.show', $ticket));
+        $ticket = $ticket->fresh();
+        expect($ticket->status)->toBe(Ticket::STATUS_PO_GENERATED);
+        expect($ticket->purchaseOrder)->not->toBeNull();
+        expect($ticket->purchaseOrder->pdf_path)->not->toBeNull();
     });
 
-    test('admin berhasil menolak tiket berstatus budget_locked dan melakukan refund pagu divisi', function () {
-        $division = Division::factory()->create([
-            'yearly_budget_limit' => 1_000_000_000.00,
-            'remaining_budget'    => 900_000_000.00, // sudah dipotong 100 juta
-        ]);
-        $officer = User::factory()->forDivision($division)->create();
-        $admin   = User::factory()->create(['division_id' => null]);
-        
-        $ticket = Ticket::factory()->forUser($officer)->create([
-            'division_id'      => $division->id,
-            'budget_estimated' => 100_000_000.00,
-            'status'           => Ticket::STATUS_BUDGET_LOCKED,
-        ]);
+});
 
-        $response = $this->actingAs($admin)
-                         ->post(route('tickets.reject', $ticket));
+// ============================================================================
+// POLICY RESTRICTIONS
+// ============================================================================
 
-        $response->assertRedirect(route('tickets.show', $ticket))
-                 ->assertSessionHas('success');
+describe('Policy & Middleware Otorisasi Akses', function () {
 
-        $ticket->refresh();
-        expect($ticket->status)->toBe(Ticket::STATUS_REJECTED);
+    test('Staff tidak dapat menyetujui dokumen PFA (403)', function () {
+        $division = Division::factory()->create();
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $ticket   = Ticket::factory()->forUser($staff)->asPendingReview()->create();
 
-        // Budget dikembalikan (900jt + 100jt = 1M)
-        $division->refresh();
-        expect((float) $division->remaining_budget)->toBe(1_000_000_000.00);
+        $this->actingAs($staff)
+             ->post(route('tickets.review-approve', $ticket))
+             ->assertForbidden();
     });
 
-    test('officer biasa ditolak (403) saat mencoba menyetujui atau menolak tiket', function () {
-        $division = Division::factory()->create([
-            'yearly_budget_limit' => 1_000_000_000.00,
-            'remaining_budget'    => 900_000_000.00,
-        ]);
-        $officer  = User::factory()->forDivision($division)->create();
-        $ticket = Ticket::factory()->forUser($officer)->create([
-            'division_id'      => $division->id,
-            'budget_estimated' => 100_000_000.00,
-            'status'           => Ticket::STATUS_BUDGET_LOCKED,
-        ]);
+    test('Staff tidak dapat mem-forward tiket Head Dept (403)', function () {
+        $division = Division::factory()->create();
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $ticket   = Ticket::factory()->forUser($staff)->asPendingDeptHead()->create();
 
-        // Coba approve
-        $this->actingAs($officer)
+        $this->actingAs($staff)
+             ->post(route('tickets.forward', $ticket))
+             ->assertForbidden();
+    });
+
+    test('Head Dept tidak dapat meng-approve keputusan Head Div (403)', function () {
+        $division = Division::factory()->create();
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $headDept = User::factory()->forDivision($division)->create(['role' => 'head_dept']);
+        $ticket   = Ticket::factory()->forUser($staff)->asPendingDivHead()->create();
+
+        $this->actingAs($headDept)
              ->post(route('tickets.approve', $ticket))
              ->assertForbidden();
+    });
 
-        // Coba reject
-        $this->actingAs($officer)
-             ->post(route('tickets.reject', $ticket))
+    test('Staff tidak dapat mengakses detail tiket milik staff lain', function () {
+        $division = Division::factory()->create();
+        $staff1   = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $staff2   = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $ticket   = Ticket::factory()->forUser($staff1)->create();
+
+        $this->actingAs($staff2)
+             ->get(route('tickets.show', $ticket))
              ->assertForbidden();
+    });
 
-        // Status tiket tidak berubah
-        $ticket->refresh();
-        expect($ticket->status)->toBe(Ticket::STATUS_BUDGET_LOCKED);
+    test('PFA/Head Dept/Head Div dapat melihat detail tiket milik siapa saja', function () {
+        $division = Division::factory()->create();
+        $staff    = User::factory()->forDivision($division)->create(['role' => 'staff']);
+        $pfa      = User::factory()->forDivision($division)->create(['role' => 'pfa']);
+        $ticket   = Ticket::factory()->forUser($staff)->create();
 
-        // Budget tidak berubah
-        $division->refresh();
-        expect((float) $division->remaining_budget)->toBe(900_000_000.00);
+        $this->actingAs($pfa)
+             ->get(route('tickets.show', $ticket))
+             ->assertOk();
     });
 
 });

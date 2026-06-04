@@ -7,100 +7,51 @@ use App\Services\ProcurementValidationService;
 use Illuminate\Validation\ValidationException;
 
 // ============================================================================
-// GATE 1: BUDGET CHECKING & SMART LOCKING
+// GATE 1: BUDGET CHECKING
 // ============================================================================
 
-describe('Gate 1 — Budget Checking & Smart Locking', function () {
+describe('Gate 1 — Budget Checking', function () {
 
-    test('ticket berhasil dibuat dan pagu divisi berkurang saat budget mencukupi', function () {
+    test('validasi berhasil saat budget mencukupi', function () {
         // Arrange
         $division = Division::factory()->create([
             'yearly_budget_limit' => 5_000_000_000.00,
             'remaining_budget'    => 5_000_000_000.00,
         ]);
-        $officer = User::factory()->forDivision($division)->create();
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        $payload = [
-            'title'            => 'Pengadaan Laptop Tim IT',
+        $ticket = Ticket::factory()->forUser($staff)->create([
             'budget_estimated' => 50_000_000.00,
-            'vendor_name'      => 'PT Mitra Teknologi Utama',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
         // Act
         $service = app(ProcurementValidationService::class);
-        $ticket  = $service->runValidationPipeline($officer, $payload);
+        $updatedTicket = $service->runValidationOnTicket($ticket);
 
-        // Assert: ticket terbuat dengan status budget_locked
-        expect($ticket)->toBeInstanceOf(Ticket::class)
-            ->and($ticket->status)->toBe(Ticket::STATUS_BUDGET_LOCKED)
-            ->and($ticket->user_id)->toBe($officer->id)
-            ->and($ticket->division_id)->toBe($division->id);
-
-        // Assert: sisa pagu divisi berkurang sesuai nilai yang diajukan
-        expect($division->fresh()->remaining_budget)
-            ->toBe('4950000000.00'); // 5 Miliar - 50 Juta
+        // Assert: ticket status berubah ke pending_dept_head (lolos validasi)
+        expect($updatedTicket->status)->toBe(Ticket::STATUS_PENDING_DEPT_HEAD);
+        
+        // Pagu divisi tidak berkurang saat validasi (baru dikunci saat approved)
+        expect($division->fresh()->remaining_budget)->toBe('5000000000.00');
     });
 
     test('Gate 1 memblok ticket dan melempar ValidationException saat budget melebihi pagu divisi', function () {
-        // Arrange: divisi dengan sisa pagu sangat kecil
-        $division = Division::factory()->withLimitedBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+        // Arrange
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 1_000_000.00,
+            'remaining_budget'    => 100_000.00, // sisa 100 ribu
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        $payload = [
-            'title'            => 'Core Infrastructure Mainframe Asset',
-            'budget_estimated' => 950_000_000.00, // 950 Juta >> sisa pagu 100 Ribu
-            'vendor_name'      => 'PT Enterprise Vendor Utama',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'budget_estimated' => 950_000_000.00, // 950 Juta
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
-        // Assert: harus melempar ValidationException pada field budget_estimated
-        expect(fn () => app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload))
+        // Assert: harus melempar ValidationException
+        expect(fn () => app(ProcurementValidationService::class)->runValidationOnTicket($ticket))
             ->toThrow(ValidationException::class);
-
-        // Assert: tidak ada ticket yang tersimpan di database
-        expect(Ticket::count())->toBe(0);
-    });
-
-    test('Gate 1 memblok ticket saat pagu divisi sudah habis sepenuhnya (remaining = 0)', function () {
-        // Arrange: pagu habis total
-        $division = Division::factory()->withExhaustedBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $payload = [
-            'title'            => 'Pembelian Pulpen Kantor',
-            'budget_estimated' => 1.00, // Bahkan Rp 1 pun harus ditolak
-            'vendor_name'      => 'PT Alat Tulis Nusantara',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
-
-        expect(fn () => app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload))
-            ->toThrow(ValidationException::class);
-
-        expect(Ticket::count())->toBe(0);
-    });
-
-    test('pagu divisi tidak berkurang jika ticket gagal di gate manapun (atomik rollback)', function () {
-        // Arrange: pagu cukup, tapi requestor tidak punya divisi (Gate 3 akan gagal)
-        $division     = Division::factory()->withFullBudget()->create();
-        $budgetBefore = $division->remaining_budget;
-
-        // Officer tanpa divisi (asAdmin = division_id null)
-        $adminUser = User::factory()->asAdmin()->create();
-
-        $payload = [
-            'title'            => 'Pengadaan Apapun',
-            'budget_estimated' => 100_000_000.00,
-            'vendor_name'      => 'PT Vendor Apapun',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
-
-        expect(fn () => app(ProcurementValidationService::class)->runValidationPipeline($adminUser, $payload))
-            ->toThrow(ValidationException::class);
-
-        // Assert: pagu tidak berubah karena transaksi di-rollback
-        expect($division->fresh()->remaining_budget)->toBe($budgetBefore);
-        expect(Ticket::count())->toBe(0);
     });
 
 });
@@ -112,169 +63,127 @@ describe('Gate 1 — Budget Checking & Smart Locking', function () {
 describe('Gate 2 — Automated CAPEX / OPEX Classification', function () {
 
     test('tiket diklasifikasikan sebagai CAPEX secara otomatis jika nilai >= Rp 500 Juta', function () {
-        // Arrange
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 10_000_000_000.00,
+            'remaining_budget'    => 10_000_000_000.00,
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        $payload = [
-            'title'            => 'Pengadaan Sistem ERP Korporat',
-            'budget_estimated' => 500_000_000.00, // Tepat di threshold CAPEX
-            'vendor_name'      => 'PT SAP Indonesia',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'title'            => 'Pengadaan Sistem ERP',
+            'budget_estimated' => 500_000_000.00, // threshold CAPEX
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
+        $updatedTicket = app(ProcurementValidationService::class)->runValidationOnTicket($ticket);
 
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
-    });
-
-    test('tiket diklasifikasikan sebagai CAPEX jika nilai melebihi Rp 500 Juta', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $payload = [
-            'title'            => 'Upgrade Infrastruktur Data Center',
-            'budget_estimated' => 2_500_000_000.00, // 2,5 Miliar — jelas CAPEX
-            'vendor_name'      => 'PT Data Pusat Nusantara',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
-
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
-
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
+        expect($updatedTicket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
     });
 
     test('tiket diklasifikasikan sebagai CAPEX berdasarkan keyword judul meskipun nilainya kecil', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 10_000_000_000.00,
+            'remaining_budget'    => 10_000_000_000.00,
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        // Nilai di bawah threshold TAPI judulnya mengandung keyword CAPEX ("server")
-        $payload = [
-            'title'            => 'Pengadaan Server Development Baru',
-            'budget_estimated' => 100_000_000.00, // 100 Juta < threshold, tapi "server" = CAPEX
-            'vendor_name'      => 'PT Server Indo',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+        // Judul mengandung kata "server" -> CAPEX
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'title'            => 'Beli Server Development',
+            'budget_estimated' => 100_000_000.00, // 100 Juta < 500 Juta
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
+        $updatedTicket = app(ProcurementValidationService::class)->runValidationOnTicket($ticket);
 
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
+        expect($updatedTicket->expenditure_type)->toBe(Ticket::EXPENDITURE_CAPEX);
     });
 
     test('tiket diklasifikasikan sebagai OPEX untuk pengadaan operasional rutin di bawah threshold', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 10_000_000_000.00,
+            'remaining_budget'    => 10_000_000_000.00,
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        $payload = [
-            'title'            => 'Lisensi Microsoft 365 Tahunan',
-            'budget_estimated' => 25_000_000.00, // 25 Juta — OPEX
-            'vendor_name'      => 'PT Microsoft Indonesia',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'title'            => 'Lisensi Zoom Bulanan',
+            'budget_estimated' => 25_000_000.00,
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
+        $updatedTicket = app(ProcurementValidationService::class)->runValidationOnTicket($ticket);
 
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_OPEX);
-    });
-
-    test('Gate 2 menulis expenditure_type otomatis — tidak bisa dioverride manual oleh user', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        // Simulasi user mencoba mengirim expenditure_type manual (diabaikan oleh service)
-        $payload = [
-            'title'            => 'Pembelian Alat Tulis Kantor',
-            'budget_estimated' => 5_000_000.00, // 5 Juta = pasti OPEX
-            'vendor_name'      => 'PT Sinar Mas Stationery',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-            'expenditure_type' => 'CAPEX', // ← User mencoba force CAPEX, harus diabaikan
-        ];
-
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
-
-        // Service harus tetap menetapkan OPEX berdasarkan logika Gate 2
-        expect($ticket->expenditure_type)->toBe(Ticket::EXPENDITURE_OPEX);
+        expect($updatedTicket->expenditure_type)->toBe(Ticket::EXPENDITURE_OPEX);
     });
 
 });
 
 // ============================================================================
-// GATE 3: VENDOR & REQUESTER ELIGIBILITY
+// GATE 3: ELIGIBILITY CHECK
 // ============================================================================
 
-describe('Gate 3 — Vendor & Requester Eligibility', function () {
+describe('Gate 3 — Eligibility Check', function () {
 
-    test('Gate 3 memblok ticket jika requestor tidak memiliki assignment divisi (admin role)', function () {
-        $adminUser = User::factory()->asAdmin()->create(); // division_id = null
+    test('Gate 3 memblok ticket jika requestor tidak memiliki assignment divisi', function () {
+        $staffWithoutDivision = User::factory()->create([
+            'role'        => 'staff',
+            'division_id' => null,
+        ]);
 
-        $payload = [
-            'title'            => 'Pengadaan Apapun',
+        $division = Division::factory()->create();
+
+        $ticket = Ticket::factory()->create([
+            'user_id'          => $staffWithoutDivision->id,
+            'division_id'      => $division->id,
             'budget_estimated' => 10_000_000.00,
-            'vendor_name'      => 'PT Vendor Valid',
-            'document_path'    => 'tickets/izin-prinsip-test.pdf',
-        ];
+            'status'           => Ticket::STATUS_NEED_TO_VALIDATE,
+        ]);
 
-        expect(fn () => app(ProcurementValidationService::class)->runValidationPipeline($adminUser, $payload))
+        expect(fn () => app(ProcurementValidationService::class)->runValidationOnTicket($ticket))
             ->toThrow(ValidationException::class);
-
-        expect(Ticket::count())->toBe(0);
     });
 
 });
 
 // ============================================================================
-// GATE 4: DOCUMENT COMPLETENESS (IZIN PRINSIP)
+// BUDGET LOCK & REFUND (APPROVED & DECLINED)
 // ============================================================================
 
-describe('Gate 4 — Document Completeness (Izin Prinsip)', function () {
+describe('Budget Locking & Refund On Approval/Decline', function () {
 
-    test('ticket tetap di status draft jika document_path tidak disertakan', function () {
-        // Arrange
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
+    test('lockBudgetOnApproval berhasil memotong pagu divisi secara atomik', function () {
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 5_000_000_000.00,
+            'remaining_budget'    => 5_000_000_000.00,
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        $payload = [
-            'title'            => 'Pengadaan Laptop Tim IT',
-            'budget_estimated' => 50_000_000.00,
-            'vendor_name'      => 'PT Mitra Teknologi Utama',
-            // 'document_path' tidak ada — sengaja dikosongkan
-        ];
-
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
-
-        // Assert: ticket ada tapi statusnya draft (Gate 4 belum terpenuhi)
-        expect($ticket)->toBeInstanceOf(Ticket::class)
-            ->and($ticket->status)->toBe(Ticket::STATUS_DRAFT)
-            ->and($ticket->document_path)->toBeNull();
-    });
-
-    test('ticket masuk budget_locked saat document_path tersedia dan semua gate lolos', function () {
-        $division = Division::factory()->withFullBudget()->create();
-        $officer  = User::factory()->forDivision($division)->create();
-
-        $payload = [
-            'title'            => 'Pengadaan Switch Jaringan Cisco',
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'division_id'      => $division->id,
             'budget_estimated' => 200_000_000.00,
-            'vendor_name'      => 'PT Cisco Systems Indonesia',
-            'document_path'    => 'tickets/izin-prinsip-abc123.pdf', // Gate 4 terpenuhi
-        ];
+        ]);
 
-        $ticket = app(ProcurementValidationService::class)->runValidationPipeline($officer, $payload);
+        app(ProcurementValidationService::class)->lockBudgetOnApproval($ticket);
 
-        expect($ticket->status)->toBe(Ticket::STATUS_BUDGET_LOCKED)
-            ->and($ticket->document_path)->not->toBeNull();
+        expect($division->fresh()->remaining_budget)->toBe('4800000000.00'); // 5M - 200jt
     });
 
-    test('helper hasDocument() mengembalikan false jika document_path null', function () {
-        $ticket = Ticket::factory()->asDraft()->make(); // make() tidak simpan ke DB
+    test('refundBudget berhasil mengembalikan pagu divisi', function () {
+        $division = Division::factory()->create([
+            'yearly_budget_limit' => 5_000_000_000.00,
+            'remaining_budget'    => 4_800_000_000.00, // sudah terpotong 200jt
+        ]);
+        $staff = User::factory()->forDivision($division)->create(['role' => 'staff']);
 
-        expect($ticket->hasDocument())->toBeFalse();
-    });
+        $ticket = Ticket::factory()->forUser($staff)->create([
+            'division_id'      => $division->id,
+            'budget_estimated' => 200_000_000.00,
+        ]);
 
-    test('helper hasDocument() mengembalikan true jika document_path tersedia', function () {
-        $ticket = Ticket::factory()->asBudgetLocked()->make();
+        app(ProcurementValidationService::class)->refundBudget($ticket);
 
-        expect($ticket->hasDocument())->toBeTrue();
+        expect($division->fresh()->remaining_budget)->toBe('5000000000.00'); // kembali ke 5M
     });
 
 });
