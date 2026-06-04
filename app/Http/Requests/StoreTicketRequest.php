@@ -42,8 +42,8 @@ class StoreTicketRequest extends FormRequest
             'vendor_name'      => ['required', 'string', 'max:255'],
 
             // Gate 4: Izin Prinsip — opsional saat store (jika null, status = draft)
-            // Upload dilakukan via endpoint terpisah (UploadDocumentController)
-            'document_path'    => ['nullable', 'string', 'max:2048'],
+            // Diubah menjadi file PDF dengan batas maksimal 10MB (10240 KB)
+            'document_path'    => ['nullable', 'file', 'mimes:pdf', 'max:10240'],
         ];
     }
 
@@ -63,6 +63,9 @@ class StoreTicketRequest extends FormRequest
             'budget_estimated.decimal'  => 'Estimasi anggaran maksimal 2 angka di belakang koma.',
             'vendor_name.required'      => 'Nama vendor/pemasok wajib diisi.',
             'vendor_name.max'           => 'Nama vendor tidak boleh melebihi 255 karakter.',
+            'document_path.file'        => 'Dokumen Izin Prinsip harus berupa file valid.',
+            'document_path.mimes'       => 'Dokumen Izin Prinsip harus berformat PDF.',
+            'document_path.max'         => 'Ukuran dokumen Izin Prinsip tidak boleh melebihi 10MB.',
         ];
     }
 }

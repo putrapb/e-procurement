@@ -6,6 +6,8 @@ use App\Models\Division;
 use App\Models\Ticket;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -67,6 +69,28 @@ class ProcurementValidationService
             // ── Gate 3: Vendor & Requester Eligibility Verification ──────────
             $this->runGate3EligibilityCheck($requestor, $payload['vendor_name']);
 
+            // ── Gate 4: Document Upload & Cloud Storage Integration ──────────
+            $documentUrl = null;
+            if (isset($payload['document_path'])) {
+                if ($payload['document_path'] instanceof \Illuminate\Http\UploadedFile) {
+                    try {
+                        // Unggah file ke disk 's3' (Supabase Storage) di folder 'tickets'
+                        $path = Storage::disk('s3')->putFile('tickets', $payload['document_path']);
+                        
+                        // Dapatkan URL publik file hasil upload
+                        $documentUrl = Storage::disk('s3')->url($path);
+                    } catch (\Exception $e) {
+                        Log::error('S3 upload failed: ' . $e->getMessage());
+                        throw ValidationException::withMessages([
+                            'document_path' => ['Gagal mengunggah dokumen Izin Prinsip ke cloud storage. Silakan coba beberapa saat lagi.'],
+                        ]);
+                    }
+                } else {
+                    // fallback jika yang di-pass berupa string path (untuk seeder / unit test)
+                    $documentUrl = $payload['document_path'];
+                }
+            }
+
             // ── Buat Ticket + Kunci Pagu (atomik dalam satu transaksi DB) ────
             $ticket = Ticket::create([
                 'user_id'          => $requestor->id,
@@ -76,13 +100,12 @@ class ProcurementValidationService
                 'budget_estimated' => $payload['budget_estimated'],
                 'expenditure_type' => $expenditureType,  // Hasil Gate 2 (otomatis)
                 'vendor_name'      => $payload['vendor_name'],
-                'document_path'    => $payload['document_path'] ?? null,
+                'document_path'    => $documentUrl,       // Menyimpan public URL atau null
                 'status'           => Ticket::STATUS_BUDGET_LOCKED, // Gate 1 lolos
             ]);
 
             // ── Gate 4: Document Completeness Check ──────────────────────────
             // Jika dokumen belum ada, downgrade status ke 'draft'.
-            // Upload dokumen dilakukan terpisah via UploadDocumentController.
             if (! $ticket->hasDocument()) {
                 $ticket->update(['status' => Ticket::STATUS_DRAFT]);
             }

@@ -19,10 +19,12 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
     // ── Tickets (E-Procurement 4-Gate Engine) ─────────────────────────────
-    // Hanya mendaftarkan method yang sudah diimplementasikan di TicketController.
-    // update & destroy akan ditambahkan pada iterasi berikutnya.
-    Route::resource('tickets', TicketController::class)
-         ->only(['index', 'create', 'store', 'show']);
+    // Mendaftarkan seluruh resourceful routes untuk manajemen tiket pengadaan.
+    Route::resource('tickets', TicketController::class);
+
+    // Approval & Rejection (Aksi Admin)
+    Route::post('/tickets/{ticket}/approve', [TicketController::class, 'approve'])->name('tickets.approve');
+    Route::post('/tickets/{ticket}/reject', [TicketController::class, 'reject'])->name('tickets.reject');
 });
 
 require __DIR__.'/auth.php';

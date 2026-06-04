@@ -14,6 +14,12 @@ export default {
             fontFamily: {
                 sans: ['Figtree', ...defaultTheme.fontFamily.sans],
             },
+            colors: {
+                bni: {
+                    teal: '#005E6A',
+                    orange: '#F15A24',
+                },
+            },
         },
     },
 
